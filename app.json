@@ -35,8 +35,10 @@
       ]
     ],
     "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
+      "typedRoutes": true
+    },
+    "router": {
+      "src": "src/app"
     }
   }
 }
