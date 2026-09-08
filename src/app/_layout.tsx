@@ -1,5 +1,6 @@
 import { useFonts } from "expo-font";
 import { SplashScreen, Stack } from "expo-router";
+import "../global.css";
 
 SplashScreen.preventAutoHideAsync();
 
