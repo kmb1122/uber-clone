@@ -83,7 +83,7 @@ export const onboarding = [
     id: 2,
     title: "Best car in your hands with Ryde",
     description:
-      "Discover the convenience of finding your perfect ride with Ryde",
+      "Discover the convenience of finding your perfect ride with Ryde.",
     image: images.onboarding2,
   },
   {
