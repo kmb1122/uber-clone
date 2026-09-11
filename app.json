@@ -30,7 +30,9 @@
           "backgroundColor": "#ffffff",
           "image": "./assets/images/splash.png"
         }
-      ]
+      ],
+      "expo-image",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true

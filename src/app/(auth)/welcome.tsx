@@ -4,7 +4,7 @@ import { useRef, useState } from "react";
 import { Image, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import Swiper from "react-native-swiper";
-import CustomButton from "../../../components/CustomButton";
+import CustomButton from "../../components/CustomButton";
 
 const Onboarding = () => {
   const swiperRef = useRef<Swiper>(null);
@@ -59,6 +59,7 @@ const Onboarding = () => {
             ? router.replace("/(auth)/sign-up")
             : swiperRef.current?.scrollBy(1)
         }
+        className="w-11/12 mt-4 mb-4"
       />
     </SafeAreaView>
   );
