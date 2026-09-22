@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "ubar",
+    "name": "Ubar",
     "slug": "ubar",
     "version": "1.0.0",
     "orientation": "portrait",
@@ -11,6 +11,9 @@
     "android": {
       "predictiveBackGestureEnabled": false
     },
-    "web": {}
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": ["expo-font"]
   }
 }
