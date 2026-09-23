@@ -56,6 +56,13 @@ type PlaceSuggestion = {
   };
 };
 
+type RoutePlan = {
+  destination: string;
+  mapUrl?: string;
+  duration: string;
+  distance: string;
+};
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("Home");
   const [mode, setMode] = useState("Ride");
@@ -63,6 +70,13 @@ export default function App() {
   const [destination, setDestination] = useState("");
   const [currentLocation, setCurrentLocation] = useState("Locating you...");
   const [locationLoading, setLocationLoading] = useState(false);
+  const [currentCoordinates, setCurrentCoordinates] = useState<
+    { latitude: number; longitude: number } | undefined
+  >();
+  const [routePlan, setRoutePlan] = useState<RoutePlan | undefined>();
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [selectedSuggestion, setSelectedSuggestion] =
+    useState<PlaceSuggestion>();
   const [placeSuggestions, setPlaceSuggestions] = useState<PlaceSuggestion[]>(
     [],
   );
@@ -98,6 +112,10 @@ export default function App() {
         await AsyncStorage.setItem(cachedLocationKey, JSON.stringify(cached));
         if (!cancelled) {
           setCurrentLocation(label);
+          setCurrentCoordinates({
+            latitude: cached.latitude,
+            longitude: cached.longitude,
+          });
           setLocationLoading(false);
         }
       } catch {
@@ -109,7 +127,12 @@ export default function App() {
       const cached = await AsyncStorage.getItem(cachedLocationKey);
       if (cached && !cancelled) {
         try {
-          setCurrentLocation((JSON.parse(cached) as CachedLocation).label);
+          const cachedLocation = JSON.parse(cached) as CachedLocation;
+          setCurrentLocation(cachedLocation.label);
+          setCurrentCoordinates({
+            latitude: cachedLocation.latitude,
+            longitude: cachedLocation.longitude,
+          });
           setLocationLoading(false);
         } catch {
           await AsyncStorage.removeItem(cachedLocationKey);
@@ -183,6 +206,93 @@ export default function App() {
     return () => clearTimeout(timeout);
   }, [destination, plannerVisible]);
 
+  const showRoutePlan = (plan: RoutePlan) => {
+    setPlannerVisible(false);
+    setTimeout(() => setRoutePlan(plan), 300);
+  };
+
+  const selectDestination = async (suggestion: PlaceSuggestion) => {
+    const prediction = suggestion.placePrediction;
+    const placeId = prediction?.placeId;
+    const label = prediction?.text?.text;
+    if (!placeId || !label) return;
+
+    setDestination(label);
+    setRouteLoading(true);
+
+    try {
+      const placeResponse = await fetch(
+        `https://places.googleapis.com/v1/places/${placeId}`,
+        {
+          headers: {
+            "X-Goog-Api-Key": googleMapsApiKey ?? "",
+            "X-Goog-FieldMask": "location,formattedAddress,displayName",
+          },
+        },
+      );
+      const place = (await placeResponse.json()) as {
+        location?: { latitude?: number; longitude?: number };
+        formattedAddress?: string;
+        displayName?: { text?: string };
+      };
+      const destinationCoordinates = place.location;
+      const origin = currentCoordinates;
+
+      if (
+        !origin ||
+        !destinationCoordinates?.latitude ||
+        !destinationCoordinates.longitude
+      ) {
+        throw new Error("Route coordinates are unavailable");
+      }
+
+      const directionsUrl = new URL(
+        "https://maps.googleapis.com/maps/api/directions/json",
+      );
+      directionsUrl.searchParams.set(
+        "origin",
+        `${origin.latitude},${origin.longitude}`,
+      );
+      directionsUrl.searchParams.set(
+        "destination",
+        `${destinationCoordinates.latitude},${destinationCoordinates.longitude}`,
+      );
+      directionsUrl.searchParams.set("mode", "driving");
+      directionsUrl.searchParams.set("key", googleMapsApiKey ?? "");
+      const directionsResponse = await fetch(directionsUrl.toString());
+      const directions = (await directionsResponse.json()) as {
+        routes?: Array<{
+          overview_polyline?: { points?: string };
+          legs?: Array<{
+            distance?: { text?: string };
+            duration?: { text?: string };
+          }>;
+        }>;
+      };
+      const route = directions.routes?.[0];
+      const leg = route?.legs?.[0];
+      const encodedPath = route?.overview_polyline?.points;
+      const mapUrl = encodedPath
+        ? `https://maps.googleapis.com/maps/api/staticmap?size=750x520&scale=2&maptype=roadmap&markers=color:black%7Clabel:A%7C${origin.latitude},${origin.longitude}&markers=color:red%7Clabel:B%7C${destinationCoordinates.latitude},${destinationCoordinates.longitude}&path=color:0x252525%7Cweight:5%7Cenc:${encodeURIComponent(encodedPath)}&key=${googleMapsApiKey ?? ""}`
+        : undefined;
+
+      showRoutePlan({
+        destination: place.formattedAddress ?? place.displayName?.text ?? label,
+        mapUrl,
+        distance: leg?.distance?.text ?? "8.5 km",
+        duration: leg?.duration?.text ?? "9 min",
+      });
+    } catch {
+      showRoutePlan({
+        destination: label,
+        distance: "8.5 km",
+        duration: "9 min",
+      });
+    } finally {
+      setRouteLoading(false);
+    }
+  };
+
   if (!fontsLoaded) return null;
 
   return (
@@ -228,12 +338,9 @@ export default function App() {
                 className="mt-6 h-11 flex-row items-center rounded-[28px] border-[1.5px] border-[#252525] px-3"
               >
                 <Image source={icons.search} className="h-[19px] w-[19px]" />
-                <TextInput
-                  editable={false}
-                  placeholder="Where to?"
-                  placeholderTextColor="#252525"
-                  className="flex-1 px-2 font-jakarta-semibold text-[15px] text-[#252525]"
-                />
+                <Text className="flex-1 px-2 font-jakarta-semibold text-[15px] text-[#252525]">
+                  Where to?
+                </Text>
                 <View className="h-8 flex-row items-center gap-1 rounded-[20px] bg-[#F3F3F3] px-2.5">
                   <Text className="text-[18px] leading-[18px] text-[#202020]">
                     □
@@ -426,7 +533,10 @@ export default function App() {
                   <Text className="mr-3 text-[18px] text-[#111111]">▣</Text>
                   <TextInput
                     autoFocus
-                    onChangeText={setDestination}
+                    onChangeText={(text) => {
+                      setDestination(text);
+                      setSelectedSuggestion(undefined);
+                    }}
                     placeholder="Where to?"
                     placeholderTextColor="#777777"
                     value={destination}
@@ -440,6 +550,23 @@ export default function App() {
                 </View>
               </View>
 
+              {selectedSuggestion ? (
+                <Pressable
+                  accessibilityRole="button"
+                  disabled={routeLoading}
+                  onPress={() => void selectDestination(selectedSuggestion)}
+                  className={`mt-3 h-12 items-center justify-center rounded-lg bg-black ${routeLoading ? "opacity-60" : ""}`}
+                >
+                  {routeLoading ? (
+                    <ActivityIndicator color="#FFFFFF" />
+                  ) : (
+                    <Text className="font-jakarta-bold text-[14px] text-white">
+                      Find a ride
+                    </Text>
+                  )}
+                </Pressable>
+              ) : null}
+
               {placeSuggestions.map((suggestion) => {
                 const prediction = suggestion.placePrediction;
                 const label = prediction?.text?.text;
@@ -447,7 +574,15 @@ export default function App() {
                 return (
                   <Pressable
                     key={prediction?.placeId ?? label}
-                    onPress={() => setDestination(label)}
+                    disabled={routeLoading}
+                    onPress={() => {
+                      const selectedLabel = prediction?.text?.text;
+                      if (selectedLabel) {
+                        setDestination(selectedLabel);
+                        setSelectedSuggestion(suggestion);
+                        setPlaceSuggestions([]);
+                      }
+                    }}
                     className="flex-row items-center border-b border-[#EEEEEE] py-4"
                   >
                     <View className="mr-3 h-8 w-8 items-center justify-center rounded-full bg-[#F0F0F0]">
@@ -456,6 +591,9 @@ export default function App() {
                     <Text className="flex-1 font-jakarta-medium text-[13px] text-[#222222]">
                       {label}
                     </Text>
+                    {routeLoading ? (
+                      <ActivityIndicator color="#222222" size="small" />
+                    ) : null}
                   </Pressable>
                 );
               })}
@@ -495,6 +633,164 @@ export default function App() {
           </SafeAreaView>
         </KeyboardAvoidingView>
       </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => setRoutePlan(undefined)}
+        visible={Boolean(routePlan)}
+      >
+        <SafeAreaView className="flex-1 bg-[#E8EDF1]">
+          <View className="relative flex-1">
+            {routePlan?.mapUrl ? (
+              <Image
+                source={{ uri: routePlan.mapUrl }}
+                className="absolute inset-0"
+                resizeMode="cover"
+              />
+            ) : (
+              <View className="absolute inset-0 items-center justify-center bg-[#DCE4EA]">
+                <Text className="font-jakarta-medium text-xs text-[#59656D]">
+                  Google route map unavailable
+                </Text>
+              </View>
+            )}
+
+            <Pressable
+              accessibilityLabel="Back to destination search"
+              onPress={() => setRoutePlan(undefined)}
+              className="absolute left-4 top-3 h-10 w-10 items-center justify-center rounded-full bg-white shadow"
+            >
+              <Text className="text-[28px] leading-8 text-[#202020]">‹</Text>
+            </Pressable>
+
+            <View className="absolute left-4 right-4 top-[30%] gap-2">
+              <View className="self-start rounded-md bg-white px-3 py-2 shadow">
+                <Text className="font-jakarta-bold text-xs text-[#222222]">
+                  {routePlan?.destination}
+                </Text>
+                <Text className="font-jakarta text-[10px] text-[#666666]">
+                  {routePlan?.distance} · {routePlan?.duration}
+                </Text>
+              </View>
+            </View>
+
+            <View className="absolute inset-x-0 bottom-0 h-[40%] rounded-t-[22px] bg-white px-4 pb-3 pt-4 shadow-lg">
+              <Text className="mb-3 text-center font-jakarta-bold text-[17px] text-[#111111]">
+                Choose a ride
+              </Text>
+
+              <ScrollView
+                className="flex-1"
+                showsVerticalScrollIndicator={false}
+                contentContainerClassName="pb-2"
+              >
+                <Pressable className="mb-1 flex-row items-center rounded-[10px] border-2 border-[#111111] px-3 py-2.5">
+                  <Image
+                    source={require("./assets/images/signup-car.png")}
+                    className="mr-3 h-10 w-[58px]"
+                    resizeMode="contain"
+                  />
+                  <View className="flex-1">
+                    <Text className="font-jakarta-bold text-[14px] text-[#222222]">
+                      ⚡ Priority · 4
+                    </Text>
+                    <Text className="font-jakarta text-xs text-[#333333]">
+                      6:46 PM · {routePlan?.duration}
+                    </Text>
+                    <Text className="mt-1 self-start rounded bg-[#2E72D2] px-2 py-1 font-jakarta-bold text-[10px] text-white">
+                      ⚡ Faster
+                    </Text>
+                  </View>
+                  <Text className="font-jakarta-bold text-[14px] text-[#222222]">
+                    NGN 10,800.00
+                  </Text>
+                </Pressable>
+
+                <RideOption
+                  imageSource={require("./assets/images/signup-car.png")}
+                  name="UberX"
+                  price="NGN 9,400.00"
+                  time="6:47 PM · 11 min"
+                />
+                <RideOption
+                  icon="📦"
+                  name="Courier"
+                  price="NGN 2,800.00"
+                  time="6:43 PM · 6 min"
+                  oldPrice="NGN 4,000.00"
+                />
+                <RideOption
+                  imageSource={require("./assets/images/signup-car.png")}
+                  name="Wait & Save"
+                  price="NGN 8,800.00"
+                  time="6:50 PM · 12 min"
+                />
+              </ScrollView>
+
+              <View className="flex-row items-center border-t border-[#EEEEEE] py-2">
+                <View className="mr-3 h-5 w-5 items-center justify-center rounded-sm bg-[#75B943]">
+                  <Text className="text-[11px] text-white">$</Text>
+                </View>
+                <Text className="flex-1 font-jakarta-semibold text-[13px] text-[#222222]">
+                  Cash
+                </Text>
+                <Text className="text-[20px] text-[#555555]">›</Text>
+              </View>
+              <Pressable className="h-12 items-center justify-center rounded-md bg-black">
+                <Text className="font-jakarta-bold text-[14px] text-white">
+                  Choose Priority
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </SafeAreaView>
+      </Modal>
     </SafeAreaView>
+  );
+}
+
+function RideOption({
+  icon,
+  imageSource,
+  name,
+  price,
+  time,
+  oldPrice,
+}: {
+  icon?: string;
+  imageSource?: number;
+  name: string;
+  price: string;
+  time: string;
+  oldPrice?: string;
+}) {
+  return (
+    <Pressable className="flex-row items-center border-b border-[#F0F0F0] px-2 py-2.5">
+      {imageSource ? (
+        <Image
+          source={imageSource}
+          className="mr-4 h-10 w-[58px]"
+          resizeMode="contain"
+        />
+      ) : (
+        <Text className="mr-4 text-[29px]">{icon}</Text>
+      )}
+      <View className="flex-1">
+        <Text className="font-jakarta-bold text-[14px] text-[#222222]">
+          {name}
+        </Text>
+        <Text className="font-jakarta text-xs text-[#555555]">{time}</Text>
+      </View>
+      <View className="items-end">
+        <Text className="font-jakarta-semibold text-[13px] text-[#222222]">
+          {price}
+        </Text>
+        {oldPrice ? (
+          <Text className="text-[10px] text-[#777777] line-through">
+            {oldPrice}
+          </Text>
+        ) : null}
+      </View>
+    </Pressable>
   );
 }
