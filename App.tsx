@@ -4,6 +4,8 @@ import * as Location from "expo-location";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import "./global.css";
+import polyline from "@mapbox/polyline";
+import MapView, { Marker, Polyline } from "react-native-maps";
 import {
   ActivityIndicator,
   Image,
@@ -11,7 +13,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
   Text,
   TextInput,
@@ -58,9 +59,11 @@ type PlaceSuggestion = {
 
 type RoutePlan = {
   destination: string;
-  mapUrl?: string;
-  duration: string;
   distance: string;
+  duration: string;
+  origin: { latitude: number; longitude: number };
+  destinationCoords: { latitude: number; longitude: number };
+  polyline: string | null;
 };
 
 export default function App() {
@@ -220,6 +223,12 @@ export default function App() {
     setDestination(label);
     setRouteLoading(true);
 
+    // ⭐ Define these BEFORE the try block
+    let destinationCoordinates: { latitude: number; longitude: number } | null =
+      null;
+    const origin = currentCoordinates ?? null;
+    let encodedPath: string | null = null;
+
     try {
       const placeResponse = await fetch(
         `https://places.googleapis.com/v1/places/${placeId}`,
@@ -230,25 +239,19 @@ export default function App() {
           },
         },
       );
-      const place = (await placeResponse.json()) as {
-        location?: { latitude?: number; longitude?: number };
-        formattedAddress?: string;
-        displayName?: { text?: string };
-      };
-      const destinationCoordinates = place.location;
-      const origin = currentCoordinates;
 
-      if (
-        !origin ||
-        !destinationCoordinates?.latitude ||
-        !destinationCoordinates.longitude
-      ) {
-        throw new Error("Route coordinates are unavailable");
+      const place = await placeResponse.json();
+
+      destinationCoordinates = place.location ?? null;
+
+      if (!origin || !destinationCoordinates) {
+        throw new Error("Route coordinates unavailable");
       }
 
       const directionsUrl = new URL(
         "https://maps.googleapis.com/maps/api/directions/json",
       );
+
       directionsUrl.searchParams.set(
         "origin",
         `${origin.latitude},${origin.longitude}`,
@@ -259,34 +262,37 @@ export default function App() {
       );
       directionsUrl.searchParams.set("mode", "driving");
       directionsUrl.searchParams.set("key", googleMapsApiKey ?? "");
+
       const directionsResponse = await fetch(directionsUrl.toString());
-      const directions = (await directionsResponse.json()) as {
-        routes?: Array<{
-          overview_polyline?: { points?: string };
-          legs?: Array<{
-            distance?: { text?: string };
-            duration?: { text?: string };
-          }>;
-        }>;
-      };
+      const directions = await directionsResponse.json();
+
       const route = directions.routes?.[0];
       const leg = route?.legs?.[0];
-      const encodedPath = route?.overview_polyline?.points;
-      const mapUrl = encodedPath
-        ? `https://maps.googleapis.com/maps/api/staticmap?size=750x520&scale=2&maptype=roadmap&markers=color:black%7Clabel:A%7C${origin.latitude},${origin.longitude}&markers=color:red%7Clabel:B%7C${destinationCoordinates.latitude},${destinationCoordinates.longitude}&path=color:0x252525%7Cweight:5%7Cenc:${encodeURIComponent(encodedPath)}&key=${googleMapsApiKey ?? ""}`
-        : undefined;
+
+      encodedPath = route?.overview_polyline?.points ?? null;
 
       showRoutePlan({
         destination: place.formattedAddress ?? place.displayName?.text ?? label,
-        mapUrl,
         distance: leg?.distance?.text ?? "8.5 km",
         duration: leg?.duration?.text ?? "9 min",
+        origin,
+        destinationCoords: destinationCoordinates,
+        polyline: encodedPath,
       });
     } catch {
+      const safeOrigin = origin ?? { latitude: 0, longitude: 0 };
+
+      const safeDestination = destinationCoordinates
+        ? destinationCoordinates
+        : safeOrigin;
+
       showRoutePlan({
         destination: label,
         distance: "8.5 km",
         duration: "9 min",
+        origin: safeOrigin,
+        destinationCoords: safeDestination,
+        polyline: null,
       });
     } finally {
       setRouteLoading(false);
@@ -296,7 +302,7 @@ export default function App() {
   if (!fontsLoaded) return null;
 
   return (
-    <SafeAreaView className="flex-1 items-center bg-[#F4F4F4]">
+    <View className="flex-1 items-center bg-[#F4F4F4]">
       <StatusBar style="dark" />
       <View className="h-full w-full max-w-[375px] overflow-hidden rounded-[16px] border border-[#D7D7D7] bg-white">
         <View className="flex-1">
@@ -476,7 +482,7 @@ export default function App() {
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           className="flex-1 bg-white"
         >
-          <SafeAreaView className="flex-1">
+          <View className="flex-1">
             <View className="flex-row items-center border-b border-[#EEEEEE] px-5 pb-4 pt-2">
               <Pressable
                 accessibilityLabel="Close ride planner"
@@ -630,7 +636,7 @@ export default function App() {
                 </Text>
               ) : null}
             </ScrollView>
-          </SafeAreaView>
+          </View>
         </KeyboardAvoidingView>
       </Modal>
 
@@ -639,17 +645,44 @@ export default function App() {
         onRequestClose={() => setRoutePlan(undefined)}
         visible={Boolean(routePlan)}
       >
-        <SafeAreaView className="flex-1 bg-[#E8EDF1]">
+        <View className="flex-1 bg-[#E8EDF1]">
           <View className="relative flex-1">
-            {routePlan?.mapUrl ? (
-              <Image
-                source={{ uri: routePlan.mapUrl }}
-                className="absolute inset-0"
-                resizeMode="cover"
-              />
+            {routePlan ? (
+              <MapView
+                style={{ flex: 1 }}
+                initialRegion={{
+                  latitude: routePlan.origin.latitude,
+                  longitude: routePlan.origin.longitude,
+                  latitudeDelta: 0.05,
+                  longitudeDelta: 0.05,
+                }}
+              >
+                <Marker coordinate={routePlan.origin} />
+                <Marker coordinate={routePlan.destinationCoords} />
+
+                {routePlan.polyline && (
+                  <Polyline
+                    coordinates={polyline
+                      .decode(routePlan.polyline)
+                      .map(([lat, lng]: [number, number]) => ({
+                        latitude: lat,
+                        longitude: lng,
+                      }))}
+                    strokeWidth={5}
+                    strokeColor="#252525"
+                  />
+                )}
+              </MapView>
             ) : (
-              <View className="absolute inset-0 items-center justify-center bg-[#DCE4EA]">
-                <Text className="font-jakarta-medium text-xs text-[#59656D]">
+              <View
+                style={{
+                  flex: 1,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: "#DCE4EA",
+                }}
+              >
+                <Text style={{ fontSize: 12, color: "#59656D" }}>
                   Google route map unavailable
                 </Text>
               </View>
@@ -663,18 +696,7 @@ export default function App() {
               <Text className="text-[28px] leading-8 text-[#202020]">‹</Text>
             </Pressable>
 
-            <View className="absolute left-4 right-4 top-[30%] gap-2">
-              <View className="self-start rounded-md bg-white px-3 py-2 shadow">
-                <Text className="font-jakarta-bold text-xs text-[#222222]">
-                  {routePlan?.destination}
-                </Text>
-                <Text className="font-jakarta text-[10px] text-[#666666]">
-                  {routePlan?.distance} · {routePlan?.duration}
-                </Text>
-              </View>
-            </View>
-
-            <View className="absolute inset-x-0 bottom-0 h-[40%] rounded-t-[22px] bg-white px-4 pb-3 pt-4 shadow-lg">
+            <View className="absolute inset-x-0 bottom-0 h-[50%] rounded-t-[22px] bg-white px-4 pb-3 pt-4 shadow-lg">
               <Text className="mb-3 text-center font-jakarta-bold text-[17px] text-[#111111]">
                 Choose a ride
               </Text>
@@ -743,9 +765,9 @@ export default function App() {
               </Pressable>
             </View>
           </View>
-        </SafeAreaView>
+        </View>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
