@@ -61,10 +61,49 @@ type RoutePlan = {
   destination: string;
   distance: string;
   duration: string;
+  distanceMeters: number;
+  durationSeconds: number;
   origin: { latitude: number; longitude: number };
   destinationCoords: { latitude: number; longitude: number };
   polyline: string | null;
 };
+
+type FareConfig = {
+  baseFare: number;
+  pricePerKm: number;
+  pricePerMinute: number;
+};
+
+const fareConfigs: Record<string, FareConfig> = {
+  priority: { baseFare: 3.5, pricePerKm: 0.95, pricePerMinute: 0.18 },
+  uberX: { baseFare: 2.5, pricePerKm: 0.8, pricePerMinute: 0.14 },
+  courier: { baseFare: 2, pricePerKm: 0.65, pricePerMinute: 0.1 },
+  waitAndSave: { baseFare: 2.25, pricePerKm: 0.7, pricePerMinute: 0.12 },
+};
+
+function calculateFare(
+  distanceMeters: number,
+  durationSeconds: number,
+  config: FareConfig,
+) {
+  const distanceKm = distanceMeters / 1000;
+  const durationMinutes = durationSeconds / 60;
+  return (
+    Math.round(
+      (config.baseFare +
+        distanceKm * config.pricePerKm +
+        durationMinutes * config.pricePerMinute) *
+        100,
+    ) / 100
+  );
+}
+
+function formatUsd(amount: number) {
+  return amount.toLocaleString("en-US", {
+    currency: "USD",
+    style: "currency",
+  });
+}
 
 export default function App() {
   const [activeTab, setActiveTab] = useState("Home");
@@ -77,6 +116,7 @@ export default function App() {
     { latitude: number; longitude: number } | undefined
   >();
   const [routePlan, setRoutePlan] = useState<RoutePlan | undefined>();
+  const [selectedRide, setSelectedRide] = useState("priority");
   const [routeLoading, setRouteLoading] = useState(false);
   const [selectedSuggestion, setSelectedSuggestion] =
     useState<PlaceSuggestion>();
@@ -269,12 +309,18 @@ export default function App() {
       const route = directions.routes?.[0];
       const leg = route?.legs?.[0];
 
+      if (!route || !leg?.distance?.value || !leg.duration?.value) {
+        throw new Error("Google route unavailable");
+      }
+
       encodedPath = route?.overview_polyline?.points ?? null;
 
       showRoutePlan({
         destination: place.formattedAddress ?? place.displayName?.text ?? label,
-        distance: leg?.distance?.text ?? "8.5 km",
-        duration: leg?.duration?.text ?? "9 min",
+        distance: leg.distance.text,
+        duration: leg.duration.text,
+        distanceMeters: leg.distance.value,
+        durationSeconds: leg.duration.value,
         origin,
         destinationCoords: destinationCoordinates,
         polyline: encodedPath,
@@ -288,8 +334,10 @@ export default function App() {
 
       showRoutePlan({
         destination: label,
-        distance: "8.5 km",
-        duration: "9 min",
+        distance: "Route unavailable",
+        duration: "ETA unavailable",
+        distanceMeters: 0,
+        durationSeconds: 0,
         origin: safeOrigin,
         destinationCoords: safeDestination,
         polyline: null,
@@ -706,7 +754,12 @@ export default function App() {
                 showsVerticalScrollIndicator={false}
                 contentContainerClassName="pb-2"
               >
-                <Pressable className="mb-1 flex-row items-center rounded-[10px] border-2 border-[#111111] px-3 py-2.5">
+                <Pressable
+                  accessibilityRole="radio"
+                  accessibilityState={{ selected: selectedRide === "priority" }}
+                  onPress={() => setSelectedRide("priority")}
+                  className={`mb-1 h-[76px] flex-row items-center rounded-[10px] border-2 px-3 py-2.5 ${selectedRide === "priority" ? "border-[#111111] bg-[#F7F7F7]" : "border-[#E5E5E5]"}`}
+                >
                   <Image
                     source={require("./assets/images/signup-car.png")}
                     className="mr-3 h-10 w-[58px]"
@@ -717,35 +770,70 @@ export default function App() {
                       ⚡ Priority · 4
                     </Text>
                     <Text className="font-jakarta text-xs text-[#333333]">
-                      6:46 PM · {routePlan?.duration}
+                      Pickup now · {routePlan?.duration ?? "ETA unavailable"}
                     </Text>
                     <Text className="mt-1 self-start rounded bg-[#2E72D2] px-2 py-1 font-jakarta-bold text-[10px] text-white">
                       ⚡ Faster
                     </Text>
                   </View>
                   <Text className="font-jakarta-bold text-[14px] text-[#222222]">
-                    NGN 10,800.00
+                    {formatUsd(
+                      calculateFare(
+                        routePlan?.distanceMeters ?? 0,
+                        routePlan?.durationSeconds ?? 0,
+                        fareConfigs.priority,
+                      ),
+                    )}
                   </Text>
                 </Pressable>
 
                 <RideOption
                   imageSource={require("./assets/images/signup-car.png")}
                   name="UberX"
-                  price="NGN 9,400.00"
-                  time="6:47 PM · 11 min"
+                  price={formatUsd(
+                    calculateFare(
+                      routePlan?.distanceMeters ?? 0,
+                      routePlan?.durationSeconds ?? 0,
+                      fareConfigs.uberX,
+                    ),
+                  )}
+                  time={`Pickup now · ${
+                    routePlan?.duration ?? "ETA unavailable"
+                  }`}
+                  selected={selectedRide === "uberX"}
+                  onPress={() => setSelectedRide("uberX")}
                 />
                 <RideOption
                   icon="📦"
                   name="Courier"
-                  price="NGN 2,800.00"
-                  time="6:43 PM · 6 min"
-                  oldPrice="NGN 4,000.00"
+                  price={formatUsd(
+                    calculateFare(
+                      routePlan?.distanceMeters ?? 0,
+                      routePlan?.durationSeconds ?? 0,
+                      fareConfigs.courier,
+                    ),
+                  )}
+                  time={`Pickup now · ${
+                    routePlan?.duration ?? "ETA unavailable"
+                  }`}
+                  selected={selectedRide === "courier"}
+                  onPress={() => setSelectedRide("courier")}
                 />
                 <RideOption
                   imageSource={require("./assets/images/signup-car.png")}
                   name="Wait & Save"
-                  price="NGN 8,800.00"
-                  time="6:50 PM · 12 min"
+                  price={formatUsd(
+                    calculateFare(
+                      routePlan?.distanceMeters ?? 0,
+                      routePlan?.durationSeconds ?? 0,
+                      fareConfigs.waitAndSave,
+                    ),
+                  )}
+                  time={`Pickup now · ${
+                    routePlan?.duration ?? "ETA unavailable"
+                  }`}
+                  selected={selectedRide === "waitAndSave"}
+                  onPress={() => setSelectedRide("waitAndSave")}
                 />
               </ScrollView>
 
@@ -754,13 +842,20 @@ export default function App() {
                   <Text className="text-[11px] text-white">$</Text>
                 </View>
                 <Text className="flex-1 font-jakarta-semibold text-[13px] text-[#222222]">
-                  Cash
+                  Cash (USD)
                 </Text>
                 <Text className="text-[20px] text-[#555555]">›</Text>
               </View>
               <Pressable className="h-12 items-center justify-center rounded-md bg-black">
                 <Text className="font-jakarta-bold text-[14px] text-white">
-                  Choose Priority
+                  Choose{" "}
+                  {selectedRide === "uberX"
+                    ? "UberX"
+                    : selectedRide === "courier"
+                      ? "Courier"
+                      : selectedRide === "waitAndSave"
+                        ? "Wait & Save"
+                        : "Priority"}
                 </Text>
               </Pressable>
             </View>
@@ -778,6 +873,8 @@ function RideOption({
   price,
   time,
   oldPrice,
+  selected = false,
+  onPress,
 }: {
   icon?: string;
   imageSource?: number;
@@ -785,17 +882,24 @@ function RideOption({
   price: string;
   time: string;
   oldPrice?: string;
+  selected?: boolean;
+  onPress?: () => void;
 }) {
   return (
-    <Pressable className="flex-row items-center border-b border-[#F0F0F0] px-2 py-2.5">
+    <Pressable
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      onPress={onPress}
+      className={`mb-1 h-[76px] flex-row items-center rounded-[10px] border-2 px-3 py-2.5 ${selected ? "border-[#111111] bg-[#F7F7F7]" : "border-[#E5E5E5]"}`}
+    >
       {imageSource ? (
         <Image
           source={imageSource}
-          className="mr-4 h-10 w-[58px]"
+          className="mr-3 h-10 w-[58px]"
           resizeMode="contain"
         />
       ) : (
-        <Text className="mr-4 text-[29px]">{icon}</Text>
+        <Text className="mr-3 text-[29px]">{icon}</Text>
       )}
       <View className="flex-1">
         <Text className="font-jakarta-bold text-[14px] text-[#222222]">
