@@ -4,6 +4,8 @@ import * as Location from "expo-location";
 import { StatusBar } from "expo-status-bar";
 import { useEffect, useState } from "react";
 import "./global.css";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
+import AuthScreen from "./components/AuthScreen";
 import polyline from "@mapbox/polyline";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import {
@@ -106,6 +108,30 @@ function formatUsd(amount: number) {
 }
 
 export default function App() {
+  return (
+    <AuthProvider>
+      <AppRoot />
+    </AuthProvider>
+  );
+}
+
+function AppRoot() {
+  const { session, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <View className="flex-1 items-center justify-center bg-white">
+        <StatusBar style="dark" />
+        <ActivityIndicator color="#111111" />
+      </View>
+    );
+  }
+
+  return session ? <MainApp /> : <AuthScreen />;
+}
+
+function MainApp() {
+  const { session, signOut } = useAuth();
   const [activeTab, setActiveTab] = useState("Home");
   const [mode, setMode] = useState("Ride");
   const [plannerVisible, setPlannerVisible] = useState(false);
@@ -472,6 +498,26 @@ export default function App() {
                 />
               </ScrollView>
             </ScrollView>
+          ) : activeTab === "Account" ? (
+            <View className="flex-1 items-center justify-center px-6 pb-20">
+              <Text className="font-jakarta-bold text-[22px] text-[#161616]">
+                {session?.user.user_metadata.first_name
+                  ? `Hi, ${session.user.user_metadata.first_name}`
+                  : "Your account"}
+              </Text>
+              <Text className="mt-2 font-jakarta text-[13px] text-[#777777]">
+                {session?.user.email}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void signOut()}
+                className="mt-6 h-11 items-center justify-center rounded-md bg-[#111111] px-8"
+              >
+                <Text className="font-jakarta-bold text-[14px] text-white">
+                  Log Out
+                </Text>
+              </Pressable>
+            </View>
           ) : (
             <View className="flex-1 items-center justify-center pb-20">
               <Image
