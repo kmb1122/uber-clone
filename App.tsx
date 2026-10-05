@@ -9,6 +9,7 @@ import AuthScreen from "./components/AuthScreen";
 import polyline from "@mapbox/polyline";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import {
+  Alert,
   ActivityIndicator,
   Image,
   KeyboardAvoidingView,
@@ -20,6 +21,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { isSupabaseConfigured, supabase } from "./lib/supabase";
 
 const icons = {
   home: require("./assets/icons/home.png"),
@@ -143,6 +145,10 @@ function MainApp() {
   >();
   const [routePlan, setRoutePlan] = useState<RoutePlan | undefined>();
   const [selectedRide, setSelectedRide] = useState("priority");
+  const [rideRequestLoading, setRideRequestLoading] = useState(false);
+  const [rideRequestVisible, setRideRequestVisible] = useState(false);
+  const [activeRideId, setActiveRideId] = useState<string | null>(null);
+  const [rideCancelLoading, setRideCancelLoading] = useState(false);
   const [routeLoading, setRouteLoading] = useState(false);
   const [selectedSuggestion, setSelectedSuggestion] =
     useState<PlaceSuggestion>();
@@ -278,6 +284,97 @@ function MainApp() {
   const showRoutePlan = (plan: RoutePlan) => {
     setPlannerVisible(false);
     setTimeout(() => setRoutePlan(plan), 300);
+  };
+
+  const requestRide = async () => {
+    if (!isSupabaseConfigured) {
+      Alert.alert("Supabase unavailable", "Check your Supabase configuration.");
+      return;
+    }
+
+    if (!session?.user.id || !routePlan || routePlan.distanceMeters <= 0) {
+      Alert.alert(
+        "Ride details unavailable",
+        "Confirm your location and destination, then try again.",
+      );
+      return;
+    }
+
+    setRideRequestVisible(true);
+    setRideRequestLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("rides")
+        .insert({
+          rider_id: session.user.id,
+          pickup_lat: routePlan.origin.latitude,
+          pickup_lng: routePlan.origin.longitude,
+          destination_lat: routePlan.destinationCoords.latitude,
+          destination_lng: routePlan.destinationCoords.longitude,
+          price: calculateFare(
+            routePlan.distanceMeters,
+            routePlan.durationSeconds,
+            fareConfigs[selectedRide] ?? fareConfigs.priority,
+          ),
+          distance_km: routePlan.distanceMeters / 1609.344,
+          status: "searching",
+          driver_id: null,
+        })
+        .select("id")
+        .single();
+
+      if (error) throw error;
+
+      setActiveRideId(data.id);
+      setRoutePlan(undefined);
+    } catch (error) {
+      setRideRequestVisible(false);
+      Alert.alert(
+        "Ride request failed",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setRideRequestLoading(false);
+    }
+  };
+
+  const cancelRideRequest = async () => {
+    if (!activeRideId || rideCancelLoading) return;
+
+    setRideCancelLoading(true);
+
+    try {
+      console.log("Attempting to cancel ride:", activeRideId);
+
+      const { data, error } = await supabase
+        .from("rides")
+        .update({ status: "cancelled" })
+        .eq("id", activeRideId)
+        .eq("status", "searching")
+        .select("id, status");
+
+      console.log("Cancellation result:", { data, error });
+
+      if (error) throw error;
+
+      if (!data || data.length === 0) {
+        throw new Error(
+          "No matching ride was found. The ride may no longer be in searching status.",
+        );
+      }
+
+      setRideRequestVisible(false);
+      setActiveRideId(null);
+    } catch (error) {
+      console.error("Cancellation error:", error);
+
+      Alert.alert(
+        "Cancellation failed",
+        error instanceof Error ? error.message : "Please try again.",
+      );
+    } finally {
+      setRideCancelLoading(false);
+    }
   };
 
   const selectDestination = async (suggestion: PlaceSuggestion) => {
@@ -892,19 +989,60 @@ function MainApp() {
                 </Text>
                 <Text className="text-[20px] text-[#555555]">›</Text>
               </View>
-              <Pressable className="h-12 items-center justify-center rounded-md bg-black">
-                <Text className="font-jakarta-bold text-[14px] text-white">
-                  Choose{" "}
-                  {selectedRide === "uberX"
-                    ? "UberX"
-                    : selectedRide === "courier"
-                      ? "Courier"
-                      : selectedRide === "waitAndSave"
-                        ? "Wait & Save"
-                        : "Priority"}
-                </Text>
+              <Pressable
+                accessibilityRole="button"
+                disabled={rideRequestLoading}
+                onPress={() => void requestRide()}
+                className={`h-12 items-center justify-center rounded-md bg-black ${rideRequestLoading ? "opacity-60" : ""}`}
+              >
+                {rideRequestLoading ? (
+                  <ActivityIndicator color="#FFFFFF" />
+                ) : (
+                  <Text className="font-jakarta-bold text-[14px] text-white">
+                    Choose{" "}
+                    {selectedRide === "uberX"
+                      ? "UberX"
+                      : selectedRide === "courier"
+                        ? "Courier"
+                        : selectedRide === "waitAndSave"
+                          ? "Wait & Save"
+                          : "Priority"}
+                  </Text>
+                )}
               </Pressable>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        animationType="slide"
+        onRequestClose={() => undefined}
+        transparent
+        visible={rideRequestVisible}
+      >
+        <View className="flex-1 justify-end bg-black/40">
+          <View className="items-center rounded-t-[24px] bg-white px-6 pb-10 pt-7">
+            <ActivityIndicator color="#111111" size="large" />
+            <Text className="mb-5 mt-4 font-jakarta-bold text-[17px] text-[#111111]">
+              Searching for drivers
+            </Text>
+            <Pressable
+              accessibilityRole="button"
+              disabled={
+                rideRequestLoading || !activeRideId || rideCancelLoading
+              }
+              onPress={() => void cancelRideRequest()}
+              className={`h-12 w-full items-center justify-center rounded-md border border-[#D8D8D8] ${rideRequestLoading || !activeRideId || rideCancelLoading ? "opacity-60" : ""}`}
+            >
+              {rideCancelLoading ? (
+                <ActivityIndicator color="#111111" />
+              ) : (
+                <Text className="font-jakarta-bold text-[14px] text-[#111111]">
+                  Cancel request
+                </Text>
+              )}
+            </Pressable>
           </View>
         </View>
       </Modal>
